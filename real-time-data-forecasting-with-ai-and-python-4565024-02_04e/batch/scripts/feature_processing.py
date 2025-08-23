@@ -10,22 +10,22 @@ def feature_pipeline(energy_data):
     batch_df = pd.DataFrame()
 
     # Lagging features
-    # Energy demand 1 day ago
-    batch_df["lag_1"] = df_daily["value"].shift(1)
+    batch_df['lag_1'] = df_daily['value'].shift(1)  
+    # Energy demand -1 day
 
-    # Energy demand 4 days ago
-    batch_df["lag_4"] = df_daily["value"].shift(4)
-    # Energy demand 5 days ago
-    batch_df["lag_5"] = df_daily["value"].shift(5)
-    # Energy demand 6 days ago
-    batch_df["lag_6"] = df_daily["value"].shift(6)
+    batch_df['lag_4'] = df_daily['value'].shift(4)  
+    # Energy demand +3 days - 7 days
+    batch_df['lag_5'] = df_daily['value'].shift(5)  
+    # Energy demand +2 days - 7 days
+    batch_df['lag_6'] = df_daily['value'].shift(6)  
+    # Energy demand +1 days - 7 days
 
-    # Energy demand 11 days ago
-    batch_df["lag_11"] = df_daily["value"].shift(11)
-    # Energy demand 12 days ago
-    batch_df["lag_12"] = df_daily["value"].shift(12)
-    # Energy demand 13 days ago
-    batch_df["lag_13"] = df_daily["value"].shift(13)
+    batch_df['lag_11'] = df_daily['value'].shift(11)  
+    # Energy demand +3 days - 14 days
+    batch_df['lag_12'] = df_daily['value'].shift(12)  
+    # Energy demand +2 days - 14 days
+    batch_df['lag_13'] = df_daily['value'].shift(13)  
+    # Energy demand +1 days - 14 days
 
     # Rolling statistics
     batch_df["rolling_mean_7"] = (
