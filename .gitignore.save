@@ -1,0 +1,23 @@
+.DS_Store
+node_modules
+.tmp
+npm-debug.log
+.venv/
+.venv/bin/
+.venv/bin/activate
+.venv/lib/
+.venv/include/
+.venv/bin/
+.venv/lib/python3.9/site-packages/
+# Ignore Python cache
+__pycache__/
+*.pyc
+
+# Ignore IDE stuff
+.vscode/
+.idea/
+
+# Ignore build/output folders
+dist/
+node_modules/
+
