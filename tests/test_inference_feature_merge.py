@@ -27,7 +27,8 @@ def test_merge_feature_records_combines_partial_rows():
         {
             "id": "row-1",
             "temperature_forecast": 11.5,
-            "timestamp": "2024-03-01T00:05:00Z",
+            # Intentional naive timestamp to verify normalization across records
+            "timestamp": "2024-03-01T00:05:00",
         },
     ]
 
@@ -37,7 +38,7 @@ def test_merge_feature_records_combines_partial_rows():
         {
             "lag_1": [1.0],
             "lag_2": [2.0],
-            "timestamp": pd.to_datetime(["2024-03-01T00:05:00Z"]),
+            "timestamp": pd.to_datetime(["2024-03-01T00:05:00"]),
             "temperature_forecast": [11.5],
         },
         index=pd.Index(["row-1"], name="id"),

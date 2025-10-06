@@ -4,7 +4,7 @@ import json
 import logging
 import warnings
 from pathlib import Path
-from typing import Iterable, List
+from typing import Iterable, List, Optional
 
 import joblib
 import numpy as np
@@ -69,6 +69,38 @@ def _last_valid_value(series: pd.Series):
     return non_null.iloc[-1]
 
 
+def _normalize_timestamp_series(series: pd.Series) -> Optional[pd.Series]:
+    """Return a timezone-naive datetime series when possible.
+
+    Values are parsed individually to gracefully handle collections that mix
+    tz-aware and tz-naive timestamps. When parsing fails, ``None`` is returned
+    so callers can fall back to a more permissive ordering strategy.
+    """
+
+    def _convert(value: object) -> pd.Timestamp:
+        if pd.isna(value):
+            return pd.NaT
+        try:
+            timestamp = pd.to_datetime(value, utc=True)
+        except (TypeError, ValueError, OverflowError):
+            return pd.NaT
+        if isinstance(timestamp, pd.Timestamp):
+            return timestamp.tz_localize(None)
+        return pd.NaT
+
+    try:
+        normalized_objects = series.map(_convert)
+    except Exception:
+        LOGGER.debug("Failed to map timestamp values; falling back to arrival order.", exc_info=True)
+        return None
+
+    try:
+        return pd.to_datetime(normalized_objects, errors="coerce")
+    except (TypeError, ValueError, OverflowError):
+        LOGGER.debug("Failed to coerce normalized timestamps; falling back to arrival order.", exc_info=True)
+        return None
+
+
 def merge_feature_records(feature_records: Iterable[dict]) -> pd.DataFrame:
     """Merge partial feature rows so each id has a single row with the latest values."""
     records = list(feature_records)
@@ -84,10 +116,16 @@ def merge_feature_records(feature_records: Iterable[dict]) -> pd.DataFrame:
     frame = frame.copy()
     frame["_arrival_index"] = range(len(frame))
 
-    sort_columns: List[str] = ["id", "_arrival_index"]
+    sort_columns: List[str] = ["id"]
     if "timestamp" in frame.columns:
-        frame["timestamp"] = pd.to_datetime(frame["timestamp"], errors="coerce")
-        sort_columns.insert(1, "timestamp")
+        normalized_timestamps = _normalize_timestamp_series(frame["timestamp"])
+        if normalized_timestamps is not None:
+            frame["timestamp"] = normalized_timestamps
+            if normalized_timestamps.notna().any():
+                sort_columns.append("timestamp")
+        else:
+            LOGGER.debug("Timestamp normalization failed; using arrival order only for sorting.")
+    sort_columns.append("_arrival_index")
 
     sorted_frame = frame.sort_values(sort_columns)
     sorted_frame = sorted_frame.drop(columns=["_arrival_index"])
