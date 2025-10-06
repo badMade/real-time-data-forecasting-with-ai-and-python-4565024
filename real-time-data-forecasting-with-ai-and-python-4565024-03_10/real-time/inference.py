@@ -13,17 +13,17 @@ from confluent_kafka import Consumer
 warnings.filterwarnings("ignore")
 
 FEATURE_NAMES: List[str] = [
-    'lag_1',
-    'lag_2',
-    'lag_6',
-    'lag_12',
-    'lag_24',
-    'rolling_mean_7',
-    'rolling_std_7',
-    'hour',
-    'day_of_week',
-    'month',
-    'temperature_forecast',
+    "lag_1",
+    "lag_2",
+    "lag_6",
+    "lag_12",
+    "lag_24",
+    "rolling_mean_7",
+    "rolling_std_7",
+    "hour",
+    "day_of_week",
+    "month",
+    "temperature_forecast",
 ]
 MODEL_PATH = Path("models/energy_demand_model_v4.pkl")
 
@@ -59,35 +59,40 @@ def fetch_all_feature_records() -> List[dict]:
     return feature_records
 
 
+def _last_valid_value(series: pd.Series):
+    non_null = series.dropna()
+    if non_null.empty:
+        return pd.NA
+    return non_null.iloc[-1]
+
+
 def merge_feature_records(feature_records: Iterable[dict]) -> pd.DataFrame:
-    """Merge partial feature rows so each id has a single row with non-null values."""
+    """Merge partial feature rows so each id has a single row with the latest values."""
     records = list(feature_records)
     if not records:
         empty_frame = pd.DataFrame(columns=FEATURE_NAMES)
-        empty_frame.index.name = 'id'
+        empty_frame.index.name = "id"
         return empty_frame
 
     frame = pd.DataFrame(records)
-    if 'id' not in frame.columns:
+    if "id" not in frame.columns:
         raise KeyError("Feature records must include an 'id' column.")
 
-    sort_columns = ['id']
-    if 'timestamp' in frame.columns:
-        frame = frame.copy()
-        frame['timestamp'] = pd.to_datetime(frame['timestamp'], errors='coerce')
-        sort_columns.append('timestamp')
+    frame = frame.copy()
+    frame["_arrival_index"] = range(len(frame))
+
+    sort_columns: List[str] = ["id", "_arrival_index"]
+    if "timestamp" in frame.columns:
+        frame["timestamp"] = pd.to_datetime(frame["timestamp"], errors="coerce")
+        sort_columns.insert(1, "timestamp")
 
     sorted_frame = frame.sort_values(sort_columns)
+    sorted_frame = sorted_frame.drop(columns=["_arrival_index"])
+
     merged = (
-        sorted_frame
-        .set_index('id')
-        .groupby(level=0)
-        .ffill()
-        .bfill()
-        .groupby(level=0)
-        .last()
+        sorted_frame.groupby("id", sort=False).agg(_last_valid_value)
     )
-    merged.index.name = 'id'
+    merged.index.name = "id"
     return merged
 
 
