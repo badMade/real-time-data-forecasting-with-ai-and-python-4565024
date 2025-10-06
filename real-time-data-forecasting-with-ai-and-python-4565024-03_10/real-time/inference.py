@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import warnings
 from pathlib import Path
 from typing import Iterable, List
@@ -11,6 +12,8 @@ import pandas as pd
 from confluent_kafka import Consumer
 
 warnings.filterwarnings("ignore")
+
+LOGGER = logging.getLogger(__name__)
 
 FEATURE_NAMES: List[str] = [
     'lag_1',
@@ -110,9 +113,17 @@ def prepare_latest_feature_record(feature_records: Iterable[dict]) -> pd.DataFra
 
 
 def predict_next_24_hours() -> tuple[np.ndarray, pd.DataFrame]:
-    latest_feature_record = prepare_latest_feature_record(fetch_all_feature_records())
+    feature_records = fetch_all_feature_records()
+    if not feature_records:
+        message = "No feature records retrieved for inference; skipping prediction."
+        LOGGER.warning(message)
+        raise ValueError(message)
+
+    latest_feature_record = prepare_latest_feature_record(feature_records)
     if latest_feature_record.empty:
-        raise ValueError("No complete feature rows available for inference.")
+        message = "No aggregated feature rows available for inference; skipping prediction."
+        LOGGER.warning(message)
+        raise ValueError(message)
 
     model = load_model(MODEL_PATH)
     prediction = model.predict(latest_feature_record)
