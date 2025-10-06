@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import warnings
+from collections import defaultdict
 from pathlib import Path
-from typing import Iterable, List
+from typing import Iterable, List, Mapping, MutableMapping
 
 import joblib
 import numpy as np
@@ -59,57 +60,52 @@ def fetch_all_feature_records() -> List[dict]:
     return feature_records
 
 
-def _last_valid_value(series: pd.Series):
-    non_null = series.dropna()
-    if non_null.empty:
-        return pd.NA
-    return non_null.iloc[-1]
+def build_feature_frame(
+    records: Iterable[Mapping[str, object]],
+    required_columns: Iterable[str],
+) -> pd.DataFrame:
+    """Merge partial records into complete feature rows indexed by identifier."""
 
+    merged: MutableMapping[str, dict] = defaultdict(dict)
+    for record in records:
+        if "id" not in record:
+            raise KeyError("Feature records must include an 'id' column.")
+        identifier = record["id"]
+        if not isinstance(identifier, str):
+            identifier = str(identifier)
 
-def merge_feature_records(feature_records: Iterable[dict]) -> pd.DataFrame:
-    """Merge partial feature rows so each id has a single row with the latest values."""
-    records = list(feature_records)
-    if not records:
-        empty_frame = pd.DataFrame(columns=FEATURE_NAMES)
+        current = merged[identifier]
+        for key, value in record.items():
+            if key == "id":
+                continue
+            current[key] = value
+
+    if not merged:
+        empty_frame = pd.DataFrame(columns=list(required_columns))
         empty_frame.index.name = "id"
         return empty_frame
 
-    frame = pd.DataFrame(records)
-    if "id" not in frame.columns:
-        raise KeyError("Feature records must include an 'id' column.")
+    frame = pd.DataFrame.from_dict(merged, orient="index")
+    frame.index.name = "id"
 
-    frame = frame.copy()
-    frame["_arrival_index"] = range(len(frame))
+    column_order = list(required_columns)
+    for column in column_order:
+        if column not in frame.columns:
+            frame[column] = pd.NA
 
-    sort_columns: List[str] = ["id", "_arrival_index"]
-    if "timestamp" in frame.columns:
-        frame["timestamp"] = pd.to_datetime(frame["timestamp"], errors="coerce")
-        sort_columns.insert(1, "timestamp")
-
-    sorted_frame = frame.sort_values(sort_columns)
-    sorted_frame = sorted_frame.drop(columns=["_arrival_index"])
-
-    merged = sorted_frame.groupby("id", sort=False).agg(_last_valid_value)
-    merged.index.name = "id"
-    return merged
+    return frame[column_order]
 
 
 def prepare_latest_feature_record(feature_records: Iterable[dict]) -> pd.DataFrame:
-    merged = merge_feature_records(feature_records)
-    if merged.empty:
-        return merged
+    feature_frame = build_feature_frame(feature_records, FEATURE_NAMES)
+    if feature_frame.empty:
+        return feature_frame
 
-    missing_columns = [name for name in FEATURE_NAMES if name not in merged.columns]
-    if missing_columns:
-        raise ValueError(f"Missing expected feature columns: {missing_columns}")
+    complete_rows = feature_frame.dropna(subset=FEATURE_NAMES)
+    if complete_rows.empty:
+        return complete_rows
 
-    latest_feature_record = (
-        merged[FEATURE_NAMES]
-        .dropna()
-        .sort_index(ascending=False)
-        .head(1)
-    )
-    return latest_feature_record
+    return complete_rows.sort_index(ascending=False).head(1)
 
 
 def predict_next_24_hours() -> tuple[np.ndarray, pd.DataFrame]:
