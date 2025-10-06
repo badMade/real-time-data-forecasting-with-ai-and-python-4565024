@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import json
+import logging
 import warnings
-from collections import defaultdict
 from pathlib import Path
-from typing import Iterable, List, Mapping, MutableMapping
+from typing import Iterable, List, Mapping
 
 import joblib
 import numpy as np
@@ -12,6 +12,8 @@ import pandas as pd
 from confluent_kafka import Consumer
 
 warnings.filterwarnings("ignore")
+
+LOGGER = logging.getLogger(__name__)
 
 FEATURE_NAMES: List[str] = [
     "lag_1",
@@ -60,34 +62,87 @@ def fetch_all_feature_records() -> List[dict]:
     return feature_records
 
 
+def _last_valid_value(series: pd.Series):
+    non_null = series.dropna()
+    if non_null.empty:
+        return pd.NA
+    return non_null.iloc[-1]
+
+
+def _normalize_timestamp_series(series: pd.Series) -> pd.Series | None:
+    """Return timezone-naive timestamps or ``None`` when normalization fails."""
+
+    def _convert(value: object) -> pd.Timestamp:
+        if pd.isna(value):
+            return pd.NaT
+        try:
+            timestamp = pd.to_datetime(value, utc=True)
+        except (TypeError, ValueError, OverflowError):
+            return pd.NaT
+        if isinstance(timestamp, pd.Timestamp):
+            return timestamp.tz_localize(None)
+        return pd.NaT
+
+    try:
+        normalized_objects = series.map(_convert)
+    except Exception:
+        LOGGER.debug("Failed to map timestamp values; falling back to arrival order.", exc_info=True)
+        return None
+
+    try:
+        return pd.to_datetime(normalized_objects, errors="coerce")
+    except (TypeError, ValueError, OverflowError):
+        LOGGER.debug("Failed to coerce normalized timestamps; falling back to arrival order.", exc_info=True)
+        return None
+
+
+def merge_feature_records(feature_records: Iterable[Mapping[str, object]]) -> pd.DataFrame:
+    """Merge partial feature rows so each id has a single row with the latest values."""
+
+    records = list(feature_records)
+    if not records:
+        empty_frame = pd.DataFrame(columns=FEATURE_NAMES)
+        empty_frame.index.name = "id"
+        return empty_frame
+
+    frame = pd.DataFrame(records)
+    if "id" not in frame.columns:
+        raise KeyError("Feature records must include an 'id' column.")
+
+    frame = frame.copy()
+    frame["id"] = frame["id"].astype(str)
+    frame["_arrival_index"] = range(len(frame))
+
+    sort_columns: List[str] = ["id"]
+    if "timestamp" in frame.columns:
+        normalized_timestamps = _normalize_timestamp_series(frame["timestamp"])
+        if normalized_timestamps is not None:
+            frame["timestamp"] = normalized_timestamps
+            if normalized_timestamps.notna().any():
+                sort_columns.append("timestamp")
+        else:
+            LOGGER.debug("Timestamp normalization failed; using arrival order only for sorting.")
+    sort_columns.append("_arrival_index")
+
+    sorted_frame = frame.sort_values(sort_columns)
+    sorted_frame = sorted_frame.drop(columns=["_arrival_index"])
+
+    merged = sorted_frame.groupby("id", sort=False).agg(_last_valid_value)
+    merged.index.name = "id"
+    return merged
+
+
 def build_feature_frame(
     records: Iterable[Mapping[str, object]],
     required_columns: Iterable[str],
 ) -> pd.DataFrame:
-    """Merge partial records into complete feature rows indexed by identifier."""
-
-    merged: MutableMapping[str, dict] = defaultdict(dict)
-    for record in records:
-        if "id" not in record:
-            raise KeyError("Feature records must include an 'id' column.")
-        identifier = record["id"]
-        if not isinstance(identifier, str):
-            identifier = str(identifier)
-
-        current = merged[identifier]
-        for key, value in record.items():
-            if key == "id":
-                continue
-            current[key] = value
-
-    if not merged:
+    merged = merge_feature_records(records)
+    if merged.empty:
         empty_frame = pd.DataFrame(columns=list(required_columns))
         empty_frame.index.name = "id"
         return empty_frame
 
-    frame = pd.DataFrame.from_dict(merged, orient="index")
-    frame.index.name = "id"
-
+    frame = merged.copy()
     column_order = list(required_columns)
     for column in column_order:
         if column not in frame.columns:
